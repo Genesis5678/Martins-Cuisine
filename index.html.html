@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Martins Cuisine Menu</title>
+  <style>
+    body { font-family: Arial, sans-serif; }
+    h1, h2 { text-align: center; }
+    .menu-item {
+      display: flex;
+      justify-content: space-between;
+      margin: 5px 0;
+    }
+    .receipt {
+      display: none;
+      font-family: monospace;
+      padding: 20px;
+    }
+    @media print {
+      body * { visibility: hidden; }
+      .receipt, .receipt * { visibility: visible; }
+      .receipt {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 80mm;
+        font-size: 12px;
+        line-height: 1.4;
+        background: white;
+      }
+    }
+    table { width: 100%; border-collapse: collapse; }
+    .receipt td, .receipt th { padding: 4px 0; }
+    .right { text-align: right; }
+    #admin-panel input { margin: 4px; }
+    #orderHistoryList, #cartList {
+      margin: 10px;
+      padding-left: 20px;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Martins Cuisine Menu</h1>
+
+<label for="tableSelect"><strong>Select Table:</strong></label>
+<select id="tableSelect">
+  <option>Table 1</option>
+  <option>Table 2</option>
+</select>
+
+<input type="text" id="search" placeholder="Search menu items..." />
+
+<h2>Menu</h2>
+<div id="menu"></div>
+
+<h2>Your Order</h2>
+<ul id="orderList">No items in order.</ul>
+
+<label>Discount (%) <input id="discount" type="number" value="0" /></label>
+<label>Tax (%) <input id="tax" type="number" value="0" /></label>
+
+<p><strong>Subtotal:</strong> £<span id="subtotal">0.00</span></p>
+<p><strong>Total:</strong> £<span id="total">0.00</span></p>
+
+<button onclick="saveCurrentOrder()">Add to Cart</button>
+<button onclick="printReceipt()">Print Receipt</button>
+
+<h2>Cart</h2>
+<ul id="cartList">No saved orders.</ul>
+
+<h2>Order History</h2>
+<ul id="orderHistoryList"></ul>
+<button onclick="clearOrderHistory()">Clear Order History</button>
+
+<h2>Admin Panel (Change Prices / Add Menu Items)</h2>
+<div id="admin-panel">
+  <input type="text" id="newItemName" placeholder="Item name" />
+  <input type="number" id="newItemPrice" placeholder="Price" />
+  <button onclick="addMenuItem()">Add Item</button>
+</div>
+
+<div class="receipt" id="receipt">
+  <div style="text-align:center;">
+    <strong>MARTINS CUISINE LTD</strong><br/>
+    201 Welford Road<br/>
+    LE2 6BH<br/>
+    United Kingdom<br/><br/>
+    <strong>Receipt</strong><br/><br/>
+    Date: <span id="receipt-date"></span><br/>
+    Receipt no: <span id="receipt-id"></span><br/><br/>
+  </div>
+
+  <table id="receipt-items">
+    <tr><th>Items</th><th class="right">Amount</th></tr>
+  </table>
+
+  <hr/>
+
+  <table>
+    <tr><td><strong>Subtotal</strong></td><td class="right">£<span id="receipt-subtotal">0.00</span></td></tr>
+    <tr><td><strong>Total</strong></td><td class="right">£<span id="receipt-total">0.00</span></td></tr>
+  </table>
+
+  <br/>
+  <table>
+    <tr><th>VAT %</th><th>Net</th><th>VAT</th><th>Gross</th></tr>
+    <tr><td>A None</td><td>£<span id="receipt-vat-net">0.00</span></td><td>–</td><td>£<span id="receipt-vat-gross">0.00</span></td></tr>
+  </table>
+
+  <br/><br/>
+  <strong>Payment</strong><br/>
+  Transaction ID: <span id="transaction-id">TAAAVLS4S2A</span><br/>
+  I AGREE TO PAY THE ABOVE TOTAL AMOUNT<br/>
+  ACCORDING TO THE CARD ISSUER AGREEMENT<br/><br/>
+  Authorisation code: <span id="auth-code">672958</span>
+</div>
+
+<script>
+  const defaultMenuData = [
+    { name: 'Margherita Pizza', price: 7.50 },
+    { name: 'Pepperoni Pizza', price: 8.50 },
+    { name: 'Caesar Salad', price: 5.00 },
+    { name: 'Grilled Chicken', price: 9.00 },
+    { name: 'Pasta Carbonara', price: 8.00 }
+  ];
+
+  let menuData = JSON.parse(localStorage.getItem('menuData')) || defaultMenuData.slice();
+  let order = {};
+  let cart = JSON.parse(localStorage.getItem('savedCart')) || [];
+  let orderHistory = JSON.parse(localStorage.getItem('orderHistory')) || [];
+
+  const menu = document.getElementById('menu');
+  const orderList = document.getElementById('orderList');
+  const search = document.getElementById('search');
+  const cartList = document.getElementById('cartList');
+
+  function renderMenu(filter = "") {
+    menu.innerHTML = "";
+    menuData.forEach((item, i) => {
+      if (item.name.toLowerCase().includes(filter.toLowerCase())) {
+        const div = document.createElement('div');
+        div.className = 'menu-item';
+        div.innerHTML = `${item.name} - £${item.price.toFixed(2)}
+          <button onclick="addToOrder('${item.name}', ${item.price})">Add</button>
+          <button onclick="removeMenuItem(${i})">Remove</button>`;
+        menu.appendChild(div);
+      }
+    });
+  }
+
+  function addToOrder(name, price) {
+    if (!order[name]) order[name] = { quantity: 0, price };
+    order[name].quantity++;
+    updateOrderDisplay();
+  }
+
+  function updateOrderDisplay() {
+    orderList.innerHTML = '';
+    let subtotal = 0;
+    for (let item in order) {
+      const qty = order[item].quantity;
+      const price = order[item].price;
+      subtotal += qty * price;
+      const li = document.createElement('li');
+      li.textContent = `${item} × ${qty} - £${(qty * price).toFixed(2)}`;
+      orderList.appendChild(li);
+    }
+    if (subtotal === 0) orderList.innerHTML = 'No items in order.';
+
+    const discount = parseFloat(document.getElementById('discount').value) || 0;
+    const tax = parseFloat(document.getElementById('tax').value) || 0;
+    let discounted = subtotal * (1 - discount / 100);
+    let total = discounted * (1 + tax / 100);
+
+    document.getElementById('subtotal').textContent = subtotal.toFixed(2);
+    document.getElementById('total').textContent = total.toFixed(2);
+  }
+
+  function generateRandomID(length) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let id = '';
+    for (let i = 0; i < length; i++) {
+      id += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return id;
+  }
+
+  function generateAuthCode() {
+    return Math.floor(100000 + Math.random() * 900000);
+  }
+
+  function printReceipt() {
+    const now = new Date();
+    const receiptNumber = 'MCLDAFZH-' + Math.floor(Math.random() * 9000 + 1000);
+    document.getElementById('receipt-date').textContent = now.toLocaleString();
+    document.getElementById('receipt-id').textContent = receiptNumber;
+
+    document.getElementById('transaction-id').textContent = generateRandomID(10);
+    document.getElementById('auth-code').textContent = generateAuthCode();
+
+    const receiptItems = document.getElementById('receipt-items');
+    receiptItems.innerHTML = `<tr><th>Items</th><th class="right">Amount</th></tr>`;
+
+    let subtotal = 0;
+    for (let item in order) {
+      const qty = order[item].quantity;
+      const price = order[item].price;
+      const totalItem = qty * price;
+      subtotal += totalItem;
+      const row = document.createElement('tr');
+      row.innerHTML = `<td>${qty}x ${item}</td><td class="right">£${totalItem.toFixed(2)} A</td>`;
+      receiptItems.appendChild(row);
+    }
+
+    const discount = parseFloat(document.getElementById('discount').value) || 0;
+    const tax = parseFloat(document.getElementById('tax').value) || 0;
+    let discounted = subtotal * (1 - discount / 100);
+    let total = discounted * (1 + tax / 100);
+
+    document.getElementById('receipt-subtotal').textContent = subtotal.toFixed(2);
+    document.getElementById('receipt-total').textContent = total.toFixed(2);
+    document.getElementById('receipt-vat-net').textContent = subtotal.toFixed(2);
+    document.getElementById('receipt-vat-gross').textContent = total.toFixed(2);
+
+    document.getElementById('receipt').style.display = 'block';
+
+    saveOrderToHistory(order, total);
+    renderOrderHistory();
+
+    setTimeout(() => window.print(), 100);
+  }
+
+  function saveOrderToHistory(orderData, total) {
+    const items = Object.entries(orderData).map(([name, { quantity }]) => `${quantity}x ${name}`);
+    orderHistory.push({
+      items: items.join(', '),
+      total: total.toFixed(2),
+      date: new Date().toLocaleString()
+    });
+    localStorage.setItem('orderHistory', JSON.stringify(orderHistory));
+    order = {};
+    updateOrderDisplay();
+  }
+
+  function saveCurrentOrder() {
+    if (Object.keys(order).length === 0) return;
+    cart.push(JSON.parse(JSON.stringify(order)));
+    localStorage.setItem('savedCart', JSON.stringify(cart));
+    order = {};
+    updateOrderDisplay();
+    renderCart();
+  }
+
+  function renderCart() {
+    cartList.innerHTML = '';
+    if (cart.length === 0) {
+      cartList.innerHTML = 'No saved orders.';
+      return;
+    }
+    cart.forEach((savedOrder, index) => {
+      const li = document.createElement('li');
+      const summary = Object.entries(savedOrder)
+        .map(([name, { quantity }]) => `${quantity}x ${name}`)
+        .join(', ');
+      li.innerHTML = `
+        Order ${index + 1}: ${summary}
+        <button onclick="loadCart(${index})">Load</button>
+        <button onclick="deleteCart(${index})">Delete</button>
+      `;
+      cartList.appendChild(li);
+    });
+  }
+
+  function loadCart(index) {
+    order = JSON.parse(JSON.stringify(cart[index]));
+    updateOrderDisplay();
+  }
+
+  function deleteCart(index) {
+    if (confirm("Delete this saved order?")) {
+      cart.splice(index, 1);
+      localStorage.setItem('savedCart', JSON.stringify(cart));
+      renderCart();
+    }
+  }
+
+  function renderOrderHistory() {
+    const historyList = document.getElementById('orderHistoryList');
+    historyList.innerHTML = '';
+    orderHistory.forEach((order) => {
+      const li = document.createElement('li');
+      li.textContent = `${order.date}: ${order.items} — £${order.total}`;
+      historyList.appendChild(li);
+    });
+  }
+
+  function clearOrderHistory() {
+    if (confirm("Are you sure you want to clear all order history?")) {
+      orderHistory = [];
+      localStorage.removeItem('orderHistory');
+      renderOrderHistory();
+    }
+  }
+
+  function addMenuItem() {
+    const name = document.getElementById('newItemName').value.trim();
+    const price = parseFloat(document.getElementById('newItemPrice').value);
+    if (name && !isNaN(price)) {
+      menuData.push({ name, price });
+      localStorage.setItem('menuData', JSON.stringify(menuData));
+      renderMenu(search.value);
+      document.getElementById('newItemName').value = '';
+      document.getElementById('newItemPrice').value = '';
+    }
+  }
+
+  function removeMenuItem(index) {
+    menuData.splice(index, 1);
+    localStorage.setItem('menuData', JSON.stringify(menuData));
+    renderMenu(search.value);
+  }
+
+  search.addEventListener('input', () => renderMenu(search.value));
+  renderMenu();
+  renderOrderHistory();
+  renderCart();
+</script>
+
+</body>
+</html>
